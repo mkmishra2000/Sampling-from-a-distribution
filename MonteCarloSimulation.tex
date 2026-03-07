@@ -375,6 +375,43 @@ The proposal is a wide Gaussian $q(z) = \mathcal{N}(z \mid 0,\, 16)$
 $k = 1.1 \times \max_z \bigl[\tilde{p}(z)/q(z)\bigr]$, computed over
 a dense grid with a 10\% safety margin, yielding $k \approx 12.60$.
 
+\begin{lstlisting}[caption={Python implementation of rejection sampling.},
+                   label=lst:rejection]
+import numpy as np
+from scipy.stats import norm
+
+def p_tilde(z):
+    return (
+        np.exp(-0.5*(z - 2)**2)
+        + 0.5*np.exp(-0.2*(z + 3)**2)*np.sin(3*z)**2
+    )
+
+def q(z):
+    return norm.pdf(z, loc=0, scale=4)
+
+def sample_q():
+    return np.random.normal(0, 4)
+
+# Compute bounding constant k
+z_grid = np.linspace(-15, 15, 100000)
+k = np.max(p_tilde(z_grid) / q(z_grid))
+k *= 1.1  # 10% safety margin
+
+def rejection_sampling(N):
+    samples = []
+    attempts = 0
+    while len(samples) < N:
+        z0 = sample_q()
+        u0 = np.random.uniform(0, k * q(z0))
+        attempts += 1
+        if u0 <= p_tilde(z0):
+            samples.append(z0)
+    return np.array(samples), attempts
+
+samples, attempts = rejection_sampling(10000)
+print(f"Acceptance rate: {len(samples)/attempts:.3f}")
+\end{lstlisting}
+
 \subsubsection{Target vs.\ Proposal Envelope}
 
 Figure~\ref{fig:rs_envelope} shows the unnormalized target alongside
@@ -532,6 +569,38 @@ A single Gaussian centred at $z = 0$ covers both modes of the target
 but wastes probability mass in the valley between them.  This leads
 to a broader spread of importance weights and a lower ESS.
 
+\begin{lstlisting}[caption={Importance sampling with a single Gaussian proposal.},
+                   label=lst:is_single]
+import numpy as np
+
+def p_tilde(z):
+    return np.exp(-z**4 + 2*z**2)
+
+sigma = 2.0
+
+def q_tilde(z):
+    return np.exp(-0.5 * (z / sigma)**2)
+
+def f(z):
+    return z**2
+
+np.random.seed(0)
+L = 100_000
+
+# Step 1: sample from q(z)
+z_samples = np.random.normal(0, sigma, size=L)
+
+# Step 2: unnormalized importance weights
+r_tilde = p_tilde(z_samples) / q_tilde(z_samples)
+
+# Step 3: normalize weights
+weights = r_tilde / np.sum(r_tilde)
+
+# Step 4: estimate expectation
+E_f = np.sum(weights * f(z_samples))
+print("Estimated E_p[z^2] =", E_f)
+\end{lstlisting}
+
 \begin{figure}[H]
     \centering
     \includegraphics[width=0.92\textwidth]{images/is_single_gaussian_target_vs_proposal.png}
@@ -570,6 +639,47 @@ with a two-component mixture:
     \caption{Importance sampling setup --- mixture proposal.}
     \label{tab:is2_setup}
 \end{table}
+
+\begin{lstlisting}[caption={Importance sampling with a Gaussian mixture proposal.},
+                   label=lst:is_mixture]
+import numpy as np
+
+def p_tilde(z):
+    return np.exp(-z**4 + 2*z**2)
+
+pi = np.array([0.5, 0.5])
+mu = np.array([-1.0, 1.0])
+sigma = np.array([0.5, 0.5])
+
+def gaussian_pdf(z, mu, sigma):
+    return (1 / (np.sqrt(2*np.pi) * sigma)) * \
+           np.exp(-0.5 * ((z - mu) / sigma)**2)
+
+def q_pdf(z):
+    return (pi[0] * gaussian_pdf(z, mu[0], sigma[0]) +
+            pi[1] * gaussian_pdf(z, mu[1], sigma[1]))
+
+def sample_q(L):
+    components = np.random.choice([0, 1], size=L, p=pi)
+    z = np.zeros(L)
+    for k in [0, 1]:
+        idx = components == k
+        z[idx] = np.random.normal(mu[k], sigma[k], np.sum(idx))
+    return z
+
+def f(z):
+    return z**2
+
+np.random.seed(42)
+L = 100_000
+
+z_samples = sample_q(L)
+r_tilde = p_tilde(z_samples) / q_pdf(z_samples)
+weights = r_tilde / np.sum(r_tilde)
+
+E_f = np.sum(weights * f(z_samples))
+print("Estimated E_p[z^2] =", E_f)
+\end{lstlisting}
 
 \begin{figure}[H]
     \centering
@@ -717,6 +827,36 @@ chain (given mild ergodicity conditions).
     \caption{Metropolis--Hastings experimental setup.}
     \label{tab:mh_setup}
 \end{table}
+
+\begin{lstlisting}[caption={Python implementation of the Metropolis--Hastings sampler.},
+                   label=lst:mh]
+import numpy as np
+
+def p_tilde(z):
+    return np.exp(-0.125 * z**4 + 0.75 * z**2 + 1)
+
+def metropolis_sampler(p_tilde, n_samples=20000, step_size=0.8):
+    samples = np.zeros(n_samples)
+    z = 0.0  # initial state
+
+    for i in range(n_samples):
+        # Propose new point
+        z_star = z + np.random.normal(0, step_size)
+
+        # Acceptance probability
+        acceptance_ratio = p_tilde(z_star) / p_tilde(z)
+        A = min(1.0, acceptance_ratio)
+
+        # Accept or reject
+        if np.random.rand() < A:
+            z = z_star
+
+        samples[i] = z
+
+    return samples
+
+samples = metropolis_sampler(p_tilde)
+\end{lstlisting}
 
 The target density is bimodal with peaks near $z \approx \pm 1.7$.
 The random-walk proposal is symmetric, so the acceptance ratio
@@ -914,6 +1054,27 @@ no approximation.
              (bivariate Gaussian).}
     \label{tab:gibbs_setup}
 \end{table}
+
+\begin{lstlisting}[caption={Python implementation of Gibbs sampling for a bivariate Gaussian.},
+                   label=lst:gibbs]
+import numpy as np
+
+rho = 0.9
+sigma_cond = np.sqrt(1 - rho**2)
+n_samples = 10000
+
+z1 = np.zeros(n_samples)
+z2 = np.zeros(n_samples)
+z1[0], z2[0] = 0.0, 0.0
+
+# Gibbs sampling loop
+for t in range(1, n_samples):
+    # Sample z1 | z2  (one variable at a time)
+    z1[t] = np.random.normal(loc=rho * z2[t-1], scale=sigma_cond)
+
+    # Sample z2 | z1  (use the UPDATED z1)
+    z2[t] = np.random.normal(loc=rho * z1[t], scale=sigma_cond)
+\end{lstlisting}
 
 \subsubsection{Joint Scatter Plot}
 
@@ -1131,6 +1292,36 @@ of the banana.
              (banana-shaped target).}
     \label{tab:mwg_setup}
 \end{table}
+
+\begin{lstlisting}[caption={Python implementation of Metropolis-within-Gibbs for the banana-shaped target.},
+                   label=lst:mwg]
+import numpy as np
+
+def log_p(z1, z2):
+    return -0.5*z1**2 - 0.5*((z2 - z1**2)**2)/0.1
+
+n_samples = 150000
+z1 = np.zeros(n_samples)
+z2 = np.zeros(n_samples)
+z1[0], z2[0] = 0.0, 0.0
+
+proposal_std = 0.3
+n_accept = 0
+
+for t in range(1, n_samples):
+    # ---- Gibbs step for z2 | z1 (exact conditional)
+    z2[t] = np.random.normal(z1[t-1]**2, np.sqrt(0.1))
+
+    # ---- Metropolis step for z1 | z2 (intractable conditional)
+    z1_prop = z1[t-1] + np.random.normal(0, proposal_std)
+    log_alpha = log_p(z1_prop, z2[t]) - log_p(z1[t-1], z2[t])
+
+    if np.log(np.random.rand()) < log_alpha:
+        z1[t] = z1_prop
+        n_accept += 1
+    else:
+        z1[t] = z1[t-1]
+\end{lstlisting}
 
 \subsubsection{Banana-Shaped Scatter Plot}
 
@@ -1364,6 +1555,27 @@ computed analytically:
         & \mathrm{Std}(z_3) &= 1.300
     \label{eq:ancestral_marginals}
 \end{align}
+
+\begin{lstlisting}[caption={Python implementation of ancestral sampling for a linear Gaussian chain.},
+                   label=lst:ancestral]
+import numpy as np
+
+# Parameters for the chain: z1 -> z2 -> z3
+a = 1.5       # slope z1 -> z2
+b = -0.8      # slope z2 -> z3
+sigma = 0.5   # noise std for z2 | z1
+tau = 0.3     # noise std for z3 | z2
+
+def ancestral_sample():
+    z1 = np.random.normal(0, 1)             # p(z1)
+    z2 = np.random.normal(a * z1, sigma)    # p(z2 | z1)
+    z3 = np.random.normal(b * z2, tau)      # p(z3 | z2)
+    return z1, z2, z3
+
+N = 10000
+samples = np.array([ancestral_sample() for _ in range(N)])
+z1, z2, z3 = samples.T
+\end{lstlisting}
 
 \subsubsection{Pairwise Scatter Plots}
 
@@ -1717,6 +1929,28 @@ The energy has:
              (double-well potential).}
     \label{tab:langevin_setup}
 \end{table}
+
+\begin{lstlisting}[caption={Python implementation of Langevin dynamics for the double-well potential.},
+                   label=lst:langevin]
+import numpy as np
+
+def energy(x):
+    return 0.25*x**4 - 0.5*x**2  # double-well potential
+
+def grad_energy(x):
+    return x**3 - x               # gradient of E(x)
+
+eta = 0.04       # step size
+T = 500000       # total iterations
+x = 3.0          # initial point (far from modes)
+burn_in = 1000
+
+samples = np.zeros(T)
+for t in range(T):
+    noise = np.sqrt(2*eta) * np.random.randn()
+    x = x - eta * grad_energy(x) + noise
+    samples[t] = x
+\end{lstlisting}
 
 \subsubsection{Energy Landscape \& Target Density}
 
