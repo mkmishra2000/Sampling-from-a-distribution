@@ -140,7 +140,8 @@ class PlotWindow(QMainWindow):
 
         # (d) Autocorrelation
         ax = axes[1, 1]
-        max_lag = min(200, len(samples) // 2)
+        # max_lag = min(200, len(samples) // 2)
+        max_lag = min(2000, len(samples) // 2)
         s_centered = samples - np.mean(samples)
         var = np.var(samples)
         if var > 0:
